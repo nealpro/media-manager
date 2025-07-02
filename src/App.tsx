@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
-// import { invoke } from "@tauri-apps/api/core"; // For actual Tauri backend calls
-// import { save } from '@tauri-apps/api/dialog'; // For native save dialog
+import { invoke } from "@tauri-apps/api/core"; // For actual Tauri backend calls
+import { save } from '@tauri-apps/plugin-dialog'; // For native save dialog
 import "./App.css"; // Your existing CSS. Ensure Tailwind directives are also processed.
 
 // Helper component for a visually better file input
@@ -72,6 +72,7 @@ function FileInputButton({
 function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileName, setFileName] = useState("");
+  const [filePath, setFilePath] = useState(""); // Add file path for backend
   const [operation, setOperation] = useState(""); // 'convert', 'trim'
 
   // Convert operation states
@@ -106,6 +107,7 @@ function App() {
       // or handle file differently for backend processing.
       // For this UI demo, `file.name` is sufficient.
       setFileName(file.name);
+      setFilePath(file.path || file.name); // Use file.path if available
       setOutputMessage({ text: "", type: "" }); // Clear previous messages
       setOperation(""); // Reset operation when a new file is selected
     }
@@ -161,33 +163,9 @@ function App() {
     }
 
     setIsProcessing(true);
-    setOutputMessage({ text: "Processing... (mock operation)", type: "info" });
-
-    const options = {
-      // In a real Tauri app, you'd pass the file path or its contents:
-      // filePath: selectedFile.path (if available and security allows direct path access from JS)
-      // or handle file transfer through Tauri's APIs
-      inputFileName: fileName,
-      operation,
-    };
-
-    // if (operation === "convert") {
-    //   options.format = convertFormat;
-    // } else if (operation === "trim") {
-    //   options.startTime = trimStart;
-    //   options.endTime = trimEnd;
-    // }
-
-    console.log("Mock processing options:", options);
+    setOutputMessage({ text: "Processing...", type: "info" });
 
     try {
-      // --- MOCK TAURI INVOCATION ---
-      // In a real Tauri app, you would use:
-      // const result = await invoke("your_ffmpeg_command", { options });
-      // For UI demonstration, we'll simulate a delay.
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      // --- END MOCK ---
-
       let suggestedOutputName = "";
       const nameWithoutExtension =
         fileName.substring(0, fileName.lastIndexOf(".")) || fileName;
@@ -225,37 +203,47 @@ function App() {
         suggestedOutputName = `${nameWithoutExtension}_trimmed.${outputExtension}`;
       }
 
+      // Show save dialog
+      const outputPath = await save({ 
+        defaultPath: suggestedOutputName,
+        filters: [{
+          name: 'Media Files',
+          extensions: ['mp4', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mkv', 'mov', 'avi', 'webm']
+        }]
+      });
+
+      if (!outputPath) {
+        setOutputMessage({ text: "Save cancelled by user.", type: "info" });
+        return;
+      }
+
+      // Call appropriate backend function
+      if (operation === "convert") {
+        await invoke("transcode", { 
+          input: filePath, 
+          output: outputPath, 
+          outEncoding: convertFormat === "mp3" ? "mp3" : "libx264" // Adjust based on format
+        });
+      } else if (operation === "trim") {
+        await invoke("trim", { 
+          input: filePath, 
+          output: outputPath, 
+          startTime: trimStart, 
+          endTime: trimEnd 
+        });
+      }
+
       setOutputMessage({
-        text: `Mock Success! Suggested output name: ${suggestedOutputName}.`,
+        text: `Success! File saved to ${outputPath}`,
         type: "success",
       });
 
-      // In a real Tauri app, you might trigger a save dialog here:
-      // const filePath = await save({ defaultPath: suggestedOutputName });
-      // if (filePath) {
-      //   await invoke("save_processed_file_command", { tempFilePath: result.outputPath, finalSavePath: filePath });
-      //   setOutputMessage({ text: `File saved to ${filePath}`, type: "success" });
-      // } else {
-      //   setOutputMessage({ text: "Save cancelled by user.", type: "info" });
-      // }
     } catch (error) {
-      console.error("Mock error during processing:", error);
-      if (error instanceof Error) {
-        const errorMessage =
-          error.message ||
-          (typeof error === "string"
-            ? error
-            : "An unknown error occurred during processing.");
-        setOutputMessage({
-          text: `Error: ${errorMessage} (mock error)`,
-          type: "error",
-        });
-      } else {
-        setOutputMessage({
-          text: "An unknown error occurred during processing.",
-          type: "error",
-        });
-      }
+      console.error("Error during processing:", error);
+      setOutputMessage({
+        text: `Error: ${error}`,
+        type: "error",
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -363,7 +351,7 @@ function App() {
                 <select
                   id="convertFormat"
                   value={convertFormat}
-                  // onChange={(e) => setConvertFormat(e.target.value)}
+                  onChange={(e) => setConvertFormat((e.target as HTMLSelectElement).value)}
                   disabled={isProcessing}
                   class="mt-1 block w-full pl-3 pr-10 py-2.5 text-base border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                 >
@@ -391,7 +379,7 @@ function App() {
                     id="trimStart"
                     value={trimStart}
                     placeholder="00:00:00.000"
-                    // onInput={(e) => setTrimStart(e.target.value)}
+                    onInput={(e) => setTrimStart((e.target as HTMLInputElement).value)}
                     disabled={isProcessing}
                     class="mt-1 block w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                   />
@@ -408,7 +396,7 @@ function App() {
                     id="trimEnd"
                     value={trimEnd}
                     placeholder="00:00:10.000"
-                    // onInput={(e) => setTrimEnd(e.target.value)}
+                    onInput={(e) => setTrimEnd((e.target as HTMLInputElement).value)}
                     disabled={isProcessing}
                     class="mt-1 block w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                   />
