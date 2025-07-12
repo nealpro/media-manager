@@ -363,7 +363,7 @@ function App() {
                 <select
                   id="convertFormat"
                   value={convertFormat}
-                  // onChange={(e) => setConvertFormat(e.target.value)}
+                  onChange={(e) => setConvertFormat((e.target as HTMLSelectElement).value)}
                   disabled={isProcessing}
                   class="mt-1 block w-full pl-3 pr-10 py-2.5 text-base border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                 >
@@ -391,7 +391,7 @@ function App() {
                     id="trimStart"
                     value={trimStart}
                     placeholder="00:00:00.000"
-                    // onInput={(e) => setTrimStart(e.target.value)}
+                    onInput={(e) => setTrimStart((e.target as HTMLInputElement).value)}
                     disabled={isProcessing}
                     class="mt-1 block w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                   />
@@ -408,7 +408,7 @@ function App() {
                     id="trimEnd"
                     value={trimEnd}
                     placeholder="00:00:10.000"
-                    // onInput={(e) => setTrimEnd(e.target.value)}
+                    onInput={(e) => setTrimEnd((e.target as HTMLInputElement).value)}
                     disabled={isProcessing}
                     class="mt-1 block w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                   />
