@@ -17,7 +17,7 @@ pub fn init() {
 pub fn remux(input: &str, output: &str) -> Result<(), String> {
     if !ffmpeg_is_installed() {
         init();
-        println!("FFmoeg was not installed, now it should be.")
+        println!("FFmpeg was not installed, now it should be.")
         // return Err("FFmpeg is not installed".into());
     }
     FfmpegCommand::new()
@@ -35,7 +35,7 @@ pub fn remux(input: &str, output: &str) -> Result<(), String> {
 pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<(), String> {
     if !ffmpeg_is_installed() {
         init();
-        println!("FFmoeg was not installed, now it should be.")
+        println!("FFmpeg was not installed, now it should be.")
         // return Err("FFmpeg is not installed".into());
     }
     FfmpegCommand::new()
@@ -57,7 +57,7 @@ pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<(), St
 pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<(), String> {
     if !ffmpeg_is_installed() {
         init();
-        println!("FFmoeg was not installed, now it should be.")
+        println!("FFmpeg was not installed, now it should be.")
         // return Err("FFmpeg is not installed".into());
     }
     FfmpegCommand::new()
