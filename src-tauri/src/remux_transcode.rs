@@ -1,12 +1,36 @@
 use ffmpeg_sidecar::command::FfmpegCommand;
-use std::path::PathBuf;
+use tauri::{AppHandle, Runtime, Manager};
+
+// Helper function to generate output filename
+fn generate_output_filename(original_name: &str, operation: &str, format: &str) -> String {
+    let base_name = if let Some(dot_pos) = original_name.rfind('.') {
+        &original_name[..dot_pos]
+    } else {
+        original_name
+    };
+    
+    match operation {
+        "convert" => format!("{}_converted.{}", base_name, format),
+        "trim" => format!("{}_trimmed.{}", base_name, 
+            original_name.split('.').last().unwrap_or("mp4")),
+        _ => format!("{}_processed.{}", base_name, 
+            original_name.split('.').last().unwrap_or("mp4")),
+    }
+}
 
 // File handling commands
 #[tauri::command]
-pub fn write_temp_file(file_data: Vec<u8>, original_name: String) -> Result<String, String> {
-    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe_path.parent().ok_or("Could not get executable directory")?;
-    let tmp_dir = exe_dir.join("tmp");
+pub fn write_temp_file<R: Runtime>(
+    app_handle: AppHandle<R>, 
+    file_data: Vec<u8>, 
+    original_name: String
+) -> Result<String, String> {
+    // Use Tauri's app_data_dir for better OS-managed temporary file handling
+    let app_data_dir = app_handle.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let tmp_dir = app_data_dir.join("tmp");
     
     // Create tmp directory if it doesn't exist
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
@@ -26,23 +50,48 @@ pub fn write_temp_file(file_data: Vec<u8>, original_name: String) -> Result<Stri
 }
 
 #[tauri::command]
+pub fn generate_temp_output_path<R: Runtime>(
+    app_handle: AppHandle<R>,
+    original_name: String,
+    operation: String,
+    format: String
+) -> Result<String, String> {
+    // Use Tauri's app_data_dir for better OS-managed temporary file handling
+    let app_data_dir = app_handle.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let tmp_dir = app_data_dir.join("tmp");
+    
+    // Generate unique filename to avoid conflicts
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let output_name = generate_output_filename(&original_name, &operation, &format);
+    let temp_output_filename = format!("{}_{}", timestamp, output_name);
+    let temp_output_path = tmp_dir.join(&temp_output_filename);
+    
+    Ok(temp_output_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 pub fn move_processed_file(temp_path: String, final_path: String) -> Result<(), String> {
     std::fs::rename(&temp_path, &final_path).map_err(|e| e.to_string())?;
-    
-    // Clean up any remaining temp files for this session
-    let temp_pathbuf = PathBuf::from(&temp_path);
-    if let Some(parent) = temp_pathbuf.parent() {
-        let _ = cleanup_temp_files(parent.to_string_lossy().to_string());
-    }
-    
     Ok(())
 }
 
 #[tauri::command]
-pub fn cleanup_temp_files(tmp_dir: String) -> Result<(), String> {
-    let tmp_path = PathBuf::from(&tmp_dir);
-    if tmp_path.exists() {
-        let entries = std::fs::read_dir(&tmp_path).map_err(|e| e.to_string())?;
+pub fn cleanup_temp_files<R: Runtime>(app_handle: AppHandle<R>) -> Result<(), String> {
+    // Use Tauri's app_data_dir for cleanup
+    let app_data_dir = app_handle.path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let tmp_dir = app_data_dir.join("tmp");
+    
+    if tmp_dir.exists() {
+        let entries = std::fs::read_dir(&tmp_dir).map_err(|e| e.to_string())?;
         for entry in entries {
             if let Ok(entry) = entry {
                 let path = entry.path();
@@ -57,7 +106,7 @@ pub fn cleanup_temp_files(tmp_dir: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn remux(input: &str, output: &str) -> Result<String, String> {
-    FfmpegCommand::new()
+    let mut child = FfmpegCommand::new()
         .arg("-i")
         .arg(input)
         .arg("-c")
@@ -65,27 +114,88 @@ pub fn remux(input: &str, output: &str) -> Result<String, String> {
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
+    
+    // Capture stderr before waiting
+    let stderr = child.take_stderr().unwrap();
+    
+    // Read stderr in a separate thread to avoid blocking
+    use std::thread;
+    use std::io::Read;
+    let stderr_handle = thread::spawn(move || {
+        let mut content = String::new();
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut content);
+        content
+    });
+    
+    // Wait for the process to complete
+    let exit_status = child.wait().map_err(|e| e.to_string())?;
+    
+    // Get stderr content
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+    
+    if !exit_status.success() {
+        return Err(format!("FFmpeg failed: {}", stderr_content));
+    }
+    
     Ok(output.to_string())
 }
 
 #[tauri::command]
 pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<String, String> {
-    FfmpegCommand::new()
-        .arg("-i")
-        .arg(input)
-        .args(&["-c:v", "libx264", "-preset", "fast", "-crf", "22"])
-        .arg("-c:a")
-        .arg(out_encoding)
-        .arg(output)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    // Check if the output format is audio-only based on the extension
+    let is_audio_only = output.to_lowercase().ends_with(".mp3") 
+        || output.to_lowercase().ends_with(".wav") 
+        || output.to_lowercase().ends_with(".m4a") 
+        || output.to_lowercase().ends_with(".aac") 
+        || output.to_lowercase().ends_with(".flac") 
+        || output.to_lowercase().ends_with(".ogg") 
+        || output.to_lowercase().ends_with(".opus");
+    
+    let mut command = FfmpegCommand::new();
+    command.arg("-i").arg(input);
+    
+    // Only add video codec arguments if not audio-only
+    if !is_audio_only {
+        command.args(&["-c:v", "libx264", "-preset", "fast", "-crf", "22"]);
+    }
+    
+    // Add audio codec arguments
+    command.arg("-c:a").arg(out_encoding);
+    
+    // Add output
+    command.arg(output);
+    
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    
+    // Capture stderr before waiting
+    let stderr = child.take_stderr().unwrap();
+    
+    // Read stderr in a separate thread to avoid blocking
+    use std::thread;
+    use std::io::Read;
+    let stderr_handle = thread::spawn(move || {
+        let mut content = String::new();
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut content);
+        content
+    });
+    
+    // Wait for the process to complete
+    let exit_status = child.wait().map_err(|e| e.to_string())?;
+    
+    // Get stderr content
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+    
+    if !exit_status.success() {
+        return Err(format!("FFmpeg failed: {}", stderr_content));
+    }
+    
     Ok(output.to_string())
 }
 
 // ffmpeg -ss HH:MM:SS -i input.mp4 -to HH:MM:SS -c:v copy -c:a copy output.mp4
 #[tauri::command]
 pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<String, String> {
-    FfmpegCommand::new()
+    let mut child = FfmpegCommand::new()
         .arg("-ss")
         .arg(start)
         .arg("-i")
@@ -96,5 +206,28 @@ pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<String,
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
+    
+    // Capture stderr before waiting
+    let stderr = child.take_stderr().unwrap();
+    
+    // Read stderr in a separate thread to avoid blocking
+    use std::thread;
+    use std::io::Read;
+    let stderr_handle = thread::spawn(move || {
+        let mut content = String::new();
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut content);
+        content
+    });
+    
+    // Wait for the process to complete
+    let exit_status = child.wait().map_err(|e| e.to_string())?;
+    
+    // Get stderr content
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+    
+    if !exit_status.success() {
+        return Err(format!("FFmpeg failed: {}", stderr_content));
+    }
+    
     Ok(output.to_string())
 }
