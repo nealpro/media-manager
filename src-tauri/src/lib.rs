@@ -12,6 +12,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Clean up any orphaned temp files from previous sessions
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let _ = remux_transcode::cleanup_temp_files(handle);
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // FFmpeg initialization
             initialize::init,
