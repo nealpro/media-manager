@@ -1,56 +1,62 @@
-use std::env::current_exe;
+use ffmpeg_sidecar::command::FfmpegCommand;
+use std::path::PathBuf;
 
-use ffmpeg_sidecar::{
-    command::{ffmpeg_is_installed, FfmpegCommand},
-    download::{
-        check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg
-    },
-    paths::sidecar_dir,
-    version::ffmpeg_version_with_path,
-};
-
+// File handling commands
 #[tauri::command]
-pub fn init() {
-    if ffmpeg_is_installed() {
-        println!("FFmpeg is already installed and available in PATH.");
-        return;
-    }
-
-    match check_latest_version() {
-        Ok(version) => println!("FFmpeg version: {}", version),
-        Err(_) => println!("Skipping FFmpeg version check on this platform"),
-    }
-
-    let download_url = ffmpeg_download_url().map_err(|e| e.to_string()).unwrap();
-    let cli_arg = std::env::args().nth(1);
-    let destination = match cli_arg {
-        Some(arg) => resolve_relative_path(
-            current_exe()
-                .map_err(|e| e.to_string()).unwrap()
-                .parent()
-                .unwrap()
-                .join(arg),
-        ),
-        None => sidecar_dir().map_err(|e| e.to_string()).unwrap(),
-    };
-
-    println!("Downloading from: {:?}", download_url);
-    let archive_path = download_ffmpeg_package(download_url, &destination);
-    println!("Downloaded package: {:?}", archive_path);
-
-    // Extraction uses `tar` on all platforms (available in Windows since version 1803)
-    println!("Extracting...");
-    unpack_ffmpeg(&archive_path.unwrap(), &destination).unwrap();
-
-    // Use the freshly installed FFmpeg to check the version number
-    let version = ffmpeg_version_with_path(destination.join("ffmpeg"));
-    println!("FFmpeg version: {}", version.unwrap_or("unknown".into()));
-
-    println!("Done! 🏁");
+pub fn write_temp_file(file_data: Vec<u8>, original_name: String) -> Result<String, String> {
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path.parent().ok_or("Could not get executable directory")?;
+    let tmp_dir = exe_dir.join("tmp");
+    
+    // Create tmp directory if it doesn't exist
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    
+    // Generate unique filename to avoid conflicts
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let temp_filename = format!("{}_{}", timestamp, original_name);
+    let temp_path = tmp_dir.join(&temp_filename);
+    
+    // Write file data to temporary location
+    std::fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
+    
+    Ok(temp_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub fn remux(input: &str, output: &str) -> Result<(), String> {
+pub fn move_processed_file(temp_path: String, final_path: String) -> Result<(), String> {
+    std::fs::rename(&temp_path, &final_path).map_err(|e| e.to_string())?;
+    
+    // Clean up any remaining temp files for this session
+    let temp_pathbuf = PathBuf::from(&temp_path);
+    if let Some(parent) = temp_pathbuf.parent() {
+        let _ = cleanup_temp_files(parent.to_string_lossy().to_string());
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cleanup_temp_files(tmp_dir: String) -> Result<(), String> {
+    let tmp_path = PathBuf::from(&tmp_dir);
+    if tmp_path.exists() {
+        let entries = std::fs::read_dir(&tmp_path).map_err(|e| e.to_string())?;
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remux(input: &str, output: &str) -> Result<String, String> {
     FfmpegCommand::new()
         .arg("-i")
         .arg(input)
@@ -59,28 +65,26 @@ pub fn remux(input: &str, output: &str) -> Result<(), String> {
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(output.to_string())
 }
 
 #[tauri::command]
-pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<(), String> {
+pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<String, String> {
     FfmpegCommand::new()
         .arg("-i")
         .arg(input)
-        .args(&["-c:v", "libx264", "-preset", "fast", "-crf", "22"]) // Example encoding options
-        // .arg("-vf")
-        // .arg("transpose=1")
-        // .arg("-c:v")
+        .args(&["-c:v", "libx264", "-preset", "fast", "-crf", "22"])
+        .arg("-c:a")
         .arg(out_encoding)
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(output.to_string())
 }
 
 // ffmpeg -ss HH:MM:SS -i input.mp4 -to HH:MM:SS -c:v copy -c:a copy output.mp4
 #[tauri::command]
-pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<(), String> {
+pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<String, String> {
     FfmpegCommand::new()
         .arg("-ss")
         .arg(start)
@@ -92,27 +96,5 @@ pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<(), Str
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// #[cfg(feature = "download_ffmpeg")]
-fn resolve_relative_path(path_buf: std::path::PathBuf) -> std::path::PathBuf {
-    use std::path::{Component, PathBuf};
-
-    let mut components: Vec<PathBuf> = vec![];
-    for component in path_buf.as_path().components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => {
-                components.push(component.as_os_str().into())
-            }
-            Component::CurDir => (),
-            Component::ParentDir => {
-                if !components.is_empty() {
-                    components.pop();
-                }
-            }
-            Component::Normal(component) => components.push(component.into()),
-        }
-    }
-    PathBuf::from_iter(components)
+    Ok(output.to_string())
 }

@@ -1,6 +1,8 @@
 import { useState } from "preact/hooks";
 import { MediaProcessorState, Operation, ConvertFormat, OutputMessage } from '../types';
 import { validateTimes, generateOutputFileName } from '../utils/validation';
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 
 export function useMediaProcessor(): MediaProcessorState & {
   handleFileChange: (event: Event) => void;
@@ -67,40 +69,73 @@ export function useMediaProcessor(): MediaProcessorState & {
     }
 
     setIsProcessing(true);
-    setOutputMessage({ text: "Processing... (mock operation)", type: "info" });
-
-    const options = {
-      inputFileName: fileName,
-      operation,
-    };
-
-    console.log("Mock processing options:", options);
+    setOutputMessage({ text: "Processing...", type: "info" });
 
     try {
-      // --- MOCK TAURI INVOCATION ---
-      // In a real Tauri app, you would use:
-      // const result = await invoke("your_ffmpeg_command", { options });
-      // For UI demonstration, we'll simulate a delay.
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      // --- END MOCK ---
+      // Initialize FFmpeg sidecar
+      await invoke("init");
 
+      // Convert File to byte array
+      const fileData = await selectedFile.arrayBuffer();
+      const fileBytes = new Uint8Array(fileData);
+
+      // Write file to temporary location
+      const tempInputPath = await invoke("write_temp_file", { 
+        fileData: Array.from(fileBytes), 
+        originalName: fileName 
+      }) as string;
+
+      // Generate output filename and path
       const suggestedOutputName = generateOutputFileName(fileName, operation, convertFormat);
+      const tempOutputPath = tempInputPath.replace(fileName, suggestedOutputName);
 
-      setOutputMessage({
-        text: `Mock Success! Suggested output name: ${suggestedOutputName}.`,
-        type: "success",
+      // Process the file based on operation
+      let processedPath: string;
+      if (operation === "convert") {
+        processedPath = await invoke("transcode", {
+          input: tempInputPath,
+          output: tempOutputPath,
+          outEncoding: convertFormat
+        }) as string;
+      } else if (operation === "trim") {
+        processedPath = await invoke("trim", {
+          input: tempInputPath,
+          output: tempOutputPath,
+          start: trimStart,
+          end: trimEnd
+        }) as string;
+      } else {
+        throw new Error("Unsupported operation");
+      }
+
+      // Let user choose where to save the processed file
+      const finalPath = await save({
+        defaultPath: suggestedOutputName,
+        filters: [{
+          name: "Media Files",
+          extensions: operation === "convert" ? [convertFormat] : ["mp4", "mkv", "mov", "avi", "webm", "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"]
+        }]
       });
 
-      // In a real Tauri app, you might trigger a save dialog here:
-      // const filePath = await save({ defaultPath: suggestedOutputName });
-      // if (filePath) {
-      //   await invoke("save_processed_file_command", { tempFilePath: result.outputPath, finalSavePath: filePath });
-      //   setOutputMessage({ text: `File saved to ${filePath}`, type: "success" });
-      // } else {
-      //   setOutputMessage({ text: "Save cancelled by user.", type: "info" });
-      // }
+      if (finalPath) {
+        // Move processed file to final location
+        await invoke("move_processed_file", {
+          tempPath: processedPath,
+          finalPath: finalPath
+        });
+
+        setOutputMessage({
+          text: `File successfully processed and saved to ${finalPath}`,
+          type: "success",
+        });
+      } else {
+        setOutputMessage({
+          text: "Save cancelled by user.",
+          type: "info",
+        });
+      }
     } catch (error) {
-      console.error("Mock error during processing:", error);
+      console.error("Error during processing:", error);
       if (error instanceof Error) {
         const errorMessage =
           error.message ||
@@ -108,7 +143,7 @@ export function useMediaProcessor(): MediaProcessorState & {
             ? error
             : "An unknown error occurred during processing.");
         setOutputMessage({
-          text: `Error: ${errorMessage} (mock error)`,
+          text: `Error: ${errorMessage}`,
           type: "error",
         });
       } else {
