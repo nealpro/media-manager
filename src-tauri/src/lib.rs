@@ -1,4 +1,4 @@
-mod initialize;
+pub mod initialize;
 mod remux_transcode;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -21,8 +21,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // FFmpeg initialization
-            initialize::init,
             // File handling
             remux_transcode::write_temp_file,
             remux_transcode::generate_temp_output_path,

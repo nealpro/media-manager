@@ -7,7 +7,6 @@ use ffmpeg_sidecar::{
     version::ffmpeg_version_with_path,
 };
 
-#[tauri::command]
 pub fn init() {
     println!("Starting FFmpeg initialization...");
 
