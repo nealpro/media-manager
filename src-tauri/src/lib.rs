@@ -17,6 +17,7 @@ pub fn run() {
             initialize::init,
             // File handling
             remux_transcode::write_temp_file,
+            remux_transcode::generate_temp_output_path,
             remux_transcode::move_processed_file,
             remux_transcode::cleanup_temp_files,
             // Media processing

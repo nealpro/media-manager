@@ -85,9 +85,13 @@ export function useMediaProcessor(): MediaProcessorState & {
         originalName: fileName 
       }) as string;
 
-      // Generate output filename and path
+      // Generate output filename and path using backend
       const suggestedOutputName = generateOutputFileName(fileName, operation, convertFormat);
-      const tempOutputPath = tempInputPath.replace(fileName, suggestedOutputName);
+      const tempOutputPath = await invoke("generate_temp_output_path", {
+        originalName: fileName,
+        operation: operation,
+        format: convertFormat
+      }) as string;
 
       // Process the file based on operation
       let processedPath: string;
