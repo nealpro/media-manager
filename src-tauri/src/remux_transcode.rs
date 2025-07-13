@@ -57,7 +57,7 @@ pub fn cleanup_temp_files(tmp_dir: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn remux(input: &str, output: &str) -> Result<String, String> {
-    FfmpegCommand::new()
+    let mut child = FfmpegCommand::new()
         .arg("-i")
         .arg(input)
         .arg("-c")
@@ -65,12 +65,35 @@ pub fn remux(input: &str, output: &str) -> Result<String, String> {
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
+    
+    // Capture stderr before waiting
+    let stderr = child.take_stderr().unwrap();
+    
+    // Read stderr in a separate thread to avoid blocking
+    use std::thread;
+    use std::io::Read;
+    let stderr_handle = thread::spawn(move || {
+        let mut content = String::new();
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut content);
+        content
+    });
+    
+    // Wait for the process to complete
+    let exit_status = child.wait().map_err(|e| e.to_string())?;
+    
+    // Get stderr content
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+    
+    if !exit_status.success() {
+        return Err(format!("FFmpeg failed: {}", stderr_content));
+    }
+    
     Ok(output.to_string())
 }
 
 #[tauri::command]
 pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<String, String> {
-    FfmpegCommand::new()
+    let mut child = FfmpegCommand::new()
         .arg("-i")
         .arg(input)
         .args(&["-c:v", "libx264", "-preset", "fast", "-crf", "22"])
@@ -79,13 +102,36 @@ pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<String
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
+    
+    // Capture stderr before waiting
+    let stderr = child.take_stderr().unwrap();
+    
+    // Read stderr in a separate thread to avoid blocking
+    use std::thread;
+    use std::io::Read;
+    let stderr_handle = thread::spawn(move || {
+        let mut content = String::new();
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut content);
+        content
+    });
+    
+    // Wait for the process to complete
+    let exit_status = child.wait().map_err(|e| e.to_string())?;
+    
+    // Get stderr content
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+    
+    if !exit_status.success() {
+        return Err(format!("FFmpeg failed: {}", stderr_content));
+    }
+    
     Ok(output.to_string())
 }
 
 // ffmpeg -ss HH:MM:SS -i input.mp4 -to HH:MM:SS -c:v copy -c:a copy output.mp4
 #[tauri::command]
 pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<String, String> {
-    FfmpegCommand::new()
+    let mut child = FfmpegCommand::new()
         .arg("-ss")
         .arg(start)
         .arg("-i")
@@ -96,5 +142,28 @@ pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<String,
         .arg(output)
         .spawn()
         .map_err(|e| e.to_string())?;
+    
+    // Capture stderr before waiting
+    let stderr = child.take_stderr().unwrap();
+    
+    // Read stderr in a separate thread to avoid blocking
+    use std::thread;
+    use std::io::Read;
+    let stderr_handle = thread::spawn(move || {
+        let mut content = String::new();
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut content);
+        content
+    });
+    
+    // Wait for the process to complete
+    let exit_status = child.wait().map_err(|e| e.to_string())?;
+    
+    // Get stderr content
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+    
+    if !exit_status.success() {
+        return Err(format!("FFmpeg failed: {}", stderr_content));
+    }
+    
     Ok(output.to_string())
 }
