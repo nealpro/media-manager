@@ -1,25 +1,56 @@
+use std::env::current_exe;
+
 use ffmpeg_sidecar::{
     command::{ffmpeg_is_installed, FfmpegCommand},
-    download::auto_download,
-    download::UNPACK_DIRNAME,
+    download::{
+        check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg
+    },
+    paths::sidecar_dir,
+    version::ffmpeg_version_with_path,
 };
 
 #[tauri::command]
 pub fn init() {
-    auto_download().unwrap();
-    println!(
-        "If FFmpeg binary was not in PATH, it has been downloaded and initialized at {}",
-        UNPACK_DIRNAME
-    );
+    if ffmpeg_is_installed() {
+        println!("FFmpeg is already installed and available in PATH.");
+        return;
+    }
+
+    match check_latest_version() {
+        Ok(version) => println!("FFmpeg version: {}", version),
+        Err(_) => println!("Skipping FFmpeg version check on this platform"),
+    }
+
+    let download_url = ffmpeg_download_url().map_err(|e| e.to_string()).unwrap();
+    let cli_arg = std::env::args().nth(1);
+    let destination = match cli_arg {
+        Some(arg) => resolve_relative_path(
+            current_exe()
+                .map_err(|e| e.to_string()).unwrap()
+                .parent()
+                .unwrap()
+                .join(arg),
+        ),
+        None => sidecar_dir().map_err(|e| e.to_string()).unwrap(),
+    };
+
+    println!("Downloading from: {:?}", download_url);
+    let archive_path = download_ffmpeg_package(download_url, &destination);
+    println!("Downloaded package: {:?}", archive_path);
+
+    // Extraction uses `tar` on all platforms (available in Windows since version 1803)
+    println!("Extracting...");
+    unpack_ffmpeg(&archive_path.unwrap(), &destination).unwrap();
+
+    // Use the freshly installed FFmpeg to check the version number
+    let version = ffmpeg_version_with_path(destination.join("ffmpeg"));
+    println!("FFmpeg version: {}", version.unwrap_or("unknown".into()));
+
+    println!("Done! 🏁");
 }
 
 #[tauri::command]
 pub fn remux(input: &str, output: &str) -> Result<(), String> {
-    if !ffmpeg_is_installed() {
-        init();
-        println!("FFmpeg was not installed, now it should be.")
-        // return Err("FFmpeg is not installed".into());
-    }
     FfmpegCommand::new()
         .arg("-i")
         .arg(input)
@@ -33,11 +64,6 @@ pub fn remux(input: &str, output: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<(), String> {
-    if !ffmpeg_is_installed() {
-        init();
-        println!("FFmpeg was not installed, now it should be.")
-        // return Err("FFmpeg is not installed".into());
-    }
     FfmpegCommand::new()
         .arg("-i")
         .arg(input)
@@ -55,11 +81,6 @@ pub fn transcode(input: &str, output: &str, out_encoding: &str) -> Result<(), St
 // ffmpeg -ss HH:MM:SS -i input.mp4 -to HH:MM:SS -c:v copy -c:a copy output.mp4
 #[tauri::command]
 pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<(), String> {
-    if !ffmpeg_is_installed() {
-        init();
-        println!("FFmpeg was not installed, now it should be.")
-        // return Err("FFmpeg is not installed".into());
-    }
     FfmpegCommand::new()
         .arg("-ss")
         .arg(start)
@@ -72,4 +93,26 @@ pub fn trim(input: &str, output: &str, start: &str, end: &str) -> Result<(), Str
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// #[cfg(feature = "download_ffmpeg")]
+fn resolve_relative_path(path_buf: std::path::PathBuf) -> std::path::PathBuf {
+    use std::path::{Component, PathBuf};
+
+    let mut components: Vec<PathBuf> = vec![];
+    for component in path_buf.as_path().components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                components.push(component.as_os_str().into())
+            }
+            Component::CurDir => (),
+            Component::ParentDir => {
+                if !components.is_empty() {
+                    components.pop();
+                }
+            }
+            Component::Normal(component) => components.push(component.into()),
+        }
+    }
+    PathBuf::from_iter(components)
 }
